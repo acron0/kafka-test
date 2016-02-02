@@ -9,11 +9,9 @@
             ;; dev
             [clojure.tools.namespace.repl :refer (refresh)]))
 
-(def topic "test")
-
-(defn start-queue! [c host port]
+(defn start-queue! [c host port topic]
   (let [conn (kafka/create-connector [{:host "localhost" :port 9092}]
-                                  {:flush-on-write true})]
+                                     {:flush-on-write true})]
     (async/go-loop []
       (if-let [x (<! c)]
         (do
@@ -21,12 +19,12 @@
           (kafka/send-msg conn topic (.getBytes x))
           (recur))))))
 
-(defrecord KafkaProducer [host port]
+(defrecord KafkaProducer [host port topic]
   component/Lifecycle
   (start [component]
     (println ";; Starting producer..." host port)
     (let [queue-chan (chan 50)]
-      (start-queue! queue-chan host port)
+      (start-queue! queue-chan host port topic)
       (assoc component :queue queue-chan)))
 
   (stop [component]
@@ -35,8 +33,8 @@
       (close! c))
     (assoc component :queue nil)))
 
-(defn new-kafka-producer [host port]
-  (map->KafkaProducer {:host host :port port}))
+(defn new-kafka-producer [host port topic]
+  (map->KafkaProducer {:host host :port port :topic topic}))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -47,7 +45,7 @@
                               :value
                               (String. "UTF-8"))))
 
-(defn start-listening! [host port]
+(defn start-listening! [host port topic]
   (async/go
     (let [config {"zookeeper.connect" (str host ":" port)
                   "group.id" "clj-kafka.consumer"
@@ -58,27 +56,27 @@
         (let [stream (kafka-zk/create-message-stream c topic)]
           (run! do-message! stream))))))
 
-(defrecord KafkaConsumer [host port]
+(defrecord KafkaConsumer [host port topic]
   component/Lifecycle
   (start [component]
     (println ";; Starting consumer..." host port)
-    (start-listening! host port)
+    (start-listening! host port topic)
     component)
 
   (stop [component]
     (println ";; Stopping consumer...")
     component))
 
-(defn new-kafka-consumer [host port]
-  (map->KafkaConsumer {:host host :port port}))
+(defn new-kafka-consumer [host port topic]
+  (map->KafkaConsumer {:host host :port port :topic topic}))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn kafka-test-system
-  [{:keys [host kafka-port zookeeper-port]}]
+  [{:keys [host kafka-port zookeeper-port topic]}]
   (component/system-map
-   :producer (new-kafka-producer host kafka-port)
-   :consumer (new-kafka-consumer host zookeeper-port)))
+   :producer (new-kafka-producer host kafka-port topic)
+   :consumer (new-kafka-consumer host zookeeper-port topic)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -89,7 +87,8 @@
                   (constantly (kafka-test-system
                                {:host "127.0.0.1"
                                 :kafka-port 9092
-                                :zookeeper-port 2181}))))
+                                :zookeeper-port 2181
+                                :topic "test"}))))
 
 (defn start []
   (alter-var-root #'system component/start))
