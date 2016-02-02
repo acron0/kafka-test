@@ -1,21 +1,24 @@
 (ns kafka-test.core
   (:require [com.stuartsierra.component :as component]
-            [clojure.core.async :as async :refer [go go-loop chan <! close! put!]]
+            [clojure.core.async :as async :refer [ chan <! close! put!]]
+            ;; producer
+            [kafka-clj.client :as kafka]
+            ;; consumer
             [clj-kafka.core :as kafka-core]
-            [clj-kafka.new.producer :as kafka]
-            [clj-kafka.consumer.zk :as kafka-zk]))
+            [clj-kafka.consumer.zk :as kafka-zk]
+            ;; dev
+            [clojure.tools.namespace.repl :refer (refresh)]))
+
+(def topic "test")
 
 (defn start-queue! [c host port]
-  (with-open [p (kafka/producer {"bootstrap.servers" (str host ":" port)}
-                                (kafka/byte-array-serializer)
-                                (kafka/byte-array-serializer))]
-    (go-loop []
-      (println "Waiting to produce...")
+  (let [conn (kafka/create-connector [{:host "localhost" :port 9092}]
+                                  {:flush-on-write true})]
+    (async/go-loop []
       (if-let [x (<! c)]
         (do
           (println "Producing =>" x)
-          (kafka/send p (kafka/record "test-topic" (.getBytes (str x))))
-          (println "Done")
+          (kafka/send-msg conn topic (.getBytes x))
           (recur))))))
 
 (defrecord KafkaProducer [host port]
@@ -27,8 +30,9 @@
       (assoc component :queue queue-chan)))
 
   (stop [component]
-    (println ";; Stopping producer...")
-    (close! (:queue component))
+    (println ";; Stopping producer..." (:queue component))
+    (if-let [c (:queue component)]
+      (close! c))
     (assoc component :queue nil)))
 
 (defn new-kafka-producer [host port]
@@ -38,17 +42,17 @@
 
 (defn do-message!
   [msg]
-  (println "Consuming <=" msg))
+  (println "Consuming <=" (:value (kafka-core/to-clojure msg))))
 
 (defn start-listening! [host port]
-  (go
+  (async/go
     (let [config {"zookeeper.connect" (str host ":" port)
                   "group.id" "clj-kafka.consumer"
                   "auto.offset.reset" "smallest"
-                  "auto.commit.enable" "false"}]
+                  "auto.commit.enable" "true"}]
       (kafka-core/with-resource [c (kafka-zk/consumer config)]
         kafka-zk/shutdown
-        (let [stream (kafka-zk/create-message-stream c "test-topic")]
+        (let [stream (kafka-zk/create-message-stream c topic)]
           (run! do-message! stream))))))
 
 (defrecord KafkaConsumer [host port]
@@ -59,7 +63,8 @@
     component)
 
   (stop [component]
-    (println ";; Stopping consumer...")))
+    (println ";; Stopping consumer...")
+    component))
 
 (defn new-kafka-consumer [host port]
   (map->KafkaConsumer {:host host :port port}))
@@ -72,20 +77,37 @@
    :producer (new-kafka-producer host kafka-port)
    :consumer (new-kafka-consumer host zookeeper-port)))
 
-(def system (kafka-test-system
-             {:host "127.0.0.1"
-              :kafka-port 9092
-              :zookeeper-port 2181}))
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(defn start
-  []
+(def system nil)
+
+(defn init []
+  (alter-var-root #'system
+                  (constantly (kafka-test-system
+                               {:host "127.0.0.1"
+                                :kafka-port 9092
+                                :zookeeper-port 2181}))))
+
+(defn start []
   (alter-var-root #'system component/start))
 
-(defn stop
-  []
-  (alter-var-root #'system component/stop))
+(defn stop []
+  (alter-var-root #'system
+                  (fn [s] (when s (component/stop s)))))
+
+(defn go []
+  (init)
+  (start))
+
+(defn reset []
+  (stop)
+  (refresh :after 'kafka-test.core/go))
 
 (defn -main
   "I don't do a whole lot."
   []
-  (println "Hello, World!"))
+  (go))
+
+(defn send!
+  [msg]
+  (put! (-> system :producer :queue) msg))
