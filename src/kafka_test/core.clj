@@ -77,6 +77,14 @@
               :kafka-port 9092
               :zookeeper-port 2181}))
 
+(defn start
+  []
+  (alter-var-root #'system component/start))
+
+(defn stop
+  []
+  (alter-var-root #'system component/stop))
+
 (defn -main
   "I don't do a whole lot."
   []
