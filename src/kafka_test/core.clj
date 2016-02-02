@@ -42,7 +42,10 @@
 
 (defn do-message!
   [msg]
-  (println "Consuming <=" (:value (kafka-core/to-clojure msg))))
+  (println "Consuming <=" (-> msg
+                              kafka-core/to-clojure
+                              :value
+                              (String. "UTF-8"))))
 
 (defn start-listening! [host port]
   (async/go
